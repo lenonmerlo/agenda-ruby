@@ -1,1 +1,7 @@
+# Runtime / artefatos
+/exports/*
+!/exports/.gitkeep
+/data/*
+!/data/.gitkeep
+/coverage/
 /spec/tmp_data/
