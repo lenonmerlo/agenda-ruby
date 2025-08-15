@@ -15,8 +15,14 @@ class Agenda
     @contacts = load_contacts
   end
 
-  def all
-    @contacts.sort_by { |c| c.name.downcase }
+  # order: :name (default) | :birthday
+  def all(order: :name)
+    case order
+    when :birthday
+      @contacts.sort_by { |c| [c.birthday ? c.birthday.month : 13, c.birthday ? c.birthday.day : 32, c.name.downcase] }
+    else
+      @contacts.sort_by { |c| c.name.downcase }
+    end
   end
 
   def search(query)
@@ -28,7 +34,6 @@ class Agenda
   end
 
   def add(name:, phone:, email:, birthday: nil)
-    validate_presence!(name: name, phone: phone, email: email)
     contact = Contact.new(
       id: SecureRandom.uuid,
       name: name, phone: phone, email: email, birthday: birthday
@@ -40,12 +45,19 @@ class Agenda
 
   def update(id, fields = {})
     contact = find_by_id!(id)
-    contact.name = fields[:name] if fields[:name]
-    contact.phone = fields[:phone] if fields[:phone]
-    contact.email = fields[:email] if fields[:email]
-    contact.birthday = fields[:birthday] if fields.key?(:birthday)
+    updated_hash = contact.to_h.merge(
+      name:  fields.fetch(:name, contact.name),
+      phone: fields.fetch(:phone, contact.phone),
+      email: fields.fetch(:email, contact.email),
+      birthday: fields.key?(:birthday) ? fields[:birthday] : contact.birthday
+    )
+    # revalida ao reconstruir
+    updated = Contact.from_h(updated_hash)
+    # substitui
+    idx = @contacts.index(contact)
+    @contacts[idx] = updated
     persist!
-    contact
+    updated
   end
 
   def remove(id)
@@ -70,16 +82,45 @@ class Agenda
     path
   end
 
+  # Importar CSV com colunas: id (opcional), name, phone, email, birthday (YYYY-MM-DD)
+  # Retorna um relatório {imported:, skipped:, errors:[]}
+  def import_csv(path, generate_ids: true, skip_invalid: true)
+    raise "Arquivo não encontrado: #{path}" unless File.exist?(path)
+    report = { imported: 0, skipped: 0, errors: [] }
+
+    CSV.foreach(path, headers: true) do |row|
+      begin
+        attrs = row.to_h.transform_keys(&:downcase)
+        id = attrs['id']
+        id = SecureRandom.uuid if (id.nil? || id.strip.empty?) && generate_ids
+
+        contact = Contact.new(
+          id: id,
+          name: attrs['name'],
+          phone: attrs['phone'],
+          email: attrs['email'],
+          birthday: attrs['birthday']
+        )
+        @contacts << contact
+        report[:imported] += 1
+      rescue => e
+        if skip_invalid
+          report[:skipped] += 1
+          report[:errors] << { row: row.to_h, error: e.message }
+        else
+          raise
+        end
+      end
+    end
+
+    persist!
+    report
+  end
+
   private
 
   def find_by_id!(id)
     @contacts.find { |c| c.id == id } || (raise "Contato não encontrado: #{id}")
-  end
-
-  def validate_presence!(name:, phone:, email:)
-    raise 'Nome obrigatório' if name.to_s.strip.empty?
-    raise 'Telefone obrigatório' if phone.to_s.strip.empty?
-    raise 'E-mail obrigatório' if email.to_s.strip.empty?
   end
 
   def load_contacts
